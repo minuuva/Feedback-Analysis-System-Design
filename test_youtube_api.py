@@ -1,8 +1,9 @@
 #!/usr/local/bin/python3.12
+import os
 import requests
 
 # Replace these with your API key and a YouTube video ID
-API_KEY = "AIzaSyBHEV3hTrgAfBsOGozWSYOBEyig9Wthz1E"  # Use your API key
+API_KEY = os.getenv("YOUTUBE_API_KEY")
 VIDEO_ID = "DSY7u8Jg9c0"  # Replace with a valid YouTube video ID
 
 def fetch_top_youtube_comments(api_key, video_id):
