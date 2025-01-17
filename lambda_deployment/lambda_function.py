@@ -4,9 +4,14 @@ import json
 import re
 import os
 import requests
+import boto3
 
 # Fetch the YouTube API key from environment variables
 API_KEY = os.getenv("YOUTUBE_API_KEY")
+SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL")  # Add your SQS queue URL here
+
+# Initialize SQS client
+sqs = boto3.client('sqs')
 
 def get_video_id(url):
     """
@@ -44,6 +49,16 @@ def fetch_top_youtube_comments(api_key, video_id):
     else:
         raise Exception(f"Error: {response.status_code}, {response.text}")
 
+def send_to_sqs(queue_url, message):
+    """
+    Sends a message to the specified SQS queue.
+    """
+    response = sqs.send_message(
+        QueueUrl=queue_url,
+        MessageBody=json.dumps(message)
+    )
+    return response
+
 def lambda_handler(event, context):
     """
     AWS Lambda entry point.
@@ -65,10 +80,20 @@ def lambda_handler(event, context):
         # Fetch the top comments
         comments = fetch_top_youtube_comments(API_KEY, video_id)
 
-        # Return the comments as JSON
+        # Create a message for SQS
+        message = {
+            "video_url": video_url,
+            "video_id": video_id,
+            "comments": comments
+        }
+
+        # Send the message to SQS
+        send_to_sqs(SQS_QUEUE_URL, message)
+
+        # Return success response
         return {
             "statusCode": 200,
-            "body": json.dumps({"comments": comments})
+            "body": json.dumps({"message": "Comments successfully sent to SQS."})
         }
 
     except Exception as e:
