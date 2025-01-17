@@ -50,11 +50,11 @@ def main():
     video_url = input("Enter the YouTube video URL: ")
     
     try:
-        # Step 2: Extract the video ID
+        #Extracting the video ID
         video_id = get_video_id(video_url)
         print(f"Extracted Video ID: {video_id}")
         
-        # Step 3: Fetch the top comments
+        #Fetching the top comments
         comments = fetch_top_youtube_comments(API_KEY, video_id)
         print("\nTop Comments:")
         for idx, comment in enumerate(comments, start=1):
