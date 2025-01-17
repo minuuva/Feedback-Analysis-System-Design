@@ -1,6 +1,8 @@
 #!/usr/local/bin/python3.12
-import os
+
+import json
 import re
+import os
 import requests
 
 # Fetch the YouTube API key from environment variables
@@ -22,11 +24,11 @@ def fetch_top_youtube_comments(api_key, video_id):
     """
     url = "https://www.googleapis.com/youtube/v3/commentThreads"
     params = {
-        "part": "snippet",              # Required parameter
-        "videoId": video_id,            # Pass the video ID here
-        "key": api_key,                 # API key
-        "maxResults": 10,               # Number of comments to fetch
-        "order": "relevance"            # Fetch top comments
+        "part": "snippet",
+        "videoId": video_id,
+        "key": api_key,
+        "maxResults": 10,
+        "order": "relevance"
     }
     response = requests.get(url, params=params)
     if response.status_code == 200:
@@ -45,30 +47,32 @@ def fetch_top_youtube_comments(api_key, video_id):
 def lambda_handler(event, context):
     """
     AWS Lambda entry point.
-    Accepts an event with either a 'video_id' or 'video_url'.
+    Accepts an event with a 'video_url' key in the JSON body.
     """
-    # Extract video ID or URL from the event
-    video_url = event.get("video_url")
-    video_id = event.get("video_id")
-
     try:
-        if video_url:
-            # Extract the video ID from the URL
-            video_id = get_video_id(video_url)
-        elif not video_id:
-            return {"statusCode": 400, "body": "Error: No video ID or URL provided."}
+        # Parse the incoming request body as JSON
+        body = json.loads(event["body"])  # Add this line to parse the JSON
+        video_url = body.get("video_url")
+        if not video_url:
+            return {
+                "statusCode": 400,
+                "body": json.dumps({"error": "No video URL provided."})
+            }
+
+        # Extract the video ID
+        video_id = get_video_id(video_url)
 
         # Fetch the top comments
         comments = fetch_top_youtube_comments(API_KEY, video_id)
 
-        # Return the comments in the Lambda response
+        # Return the comments as JSON
         return {
             "statusCode": 200,
-            "body": comments
+            "body": json.dumps({"comments": comments})
         }
 
     except Exception as e:
         return {
             "statusCode": 500,
-            "body": str(e)
+            "body": json.dumps({"error": str(e)})
         }
