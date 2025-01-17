@@ -1,12 +1,18 @@
 #!/usr/local/bin/python3.12
-
 import json
 import re
 import os
 import requests
+import boto3
+from datetime import datetime
 
 # Fetch the YouTube API key from environment variables
 API_KEY = os.getenv("YOUTUBE_API_KEY")
+
+# Initialize the DynamoDB client
+dynamodb = boto3.resource('dynamodb')
+table_name = "YouTubeComments"
+table = dynamodb.Table(table_name)
 
 def get_video_id(url):
     """
@@ -44,6 +50,19 @@ def fetch_top_youtube_comments(api_key, video_id):
     else:
         raise Exception(f"Error: {response.status_code}, {response.text}")
 
+def save_to_dynamodb(video_id, video_url, comments):
+    """
+    Saves video details and comments to DynamoDB.
+    """
+    # Format the data for DynamoDB
+    item = {
+        "video_id": video_id,
+        "video_url": video_url,
+        "timestamp": int(datetime.now().timestamp()),
+        "comments": comments
+    }
+    table.put_item(Item=item)  # Save the item to DynamoDB
+
 def lambda_handler(event, context):
     """
     AWS Lambda entry point.
@@ -51,12 +70,12 @@ def lambda_handler(event, context):
     """
     try:
         # Parse the incoming request body as JSON
-        body = json.loads(event["body"])  # Add this line to parse the JSON
+        body = json.loads(event["body"])
         video_url = body.get("video_url")
         if not video_url:
             return {
                 "statusCode": 400,
-                "body": json.dumps({"error": "No video URL provided."})
+                "body": json.dumps({"error": "No video URL provided. Please include a valid YouTube URL."})
             }
 
         # Extract the video ID
@@ -65,10 +84,20 @@ def lambda_handler(event, context):
         # Fetch the top comments
         comments = fetch_top_youtube_comments(API_KEY, video_id)
 
-        # Return the comments as JSON
+        # Save data to DynamoDB
+        save_to_dynamodb(video_id, video_url, comments)
+
+        # Construct the enhanced response
+        response = {
+            "video_id": video_id,
+            "video_url": video_url,
+            "comments": comments
+        }
+
+        # Return the response
         return {
             "statusCode": 200,
-            "body": json.dumps({"comments": comments})
+            "body": json.dumps(response)
         }
 
     except Exception as e:
