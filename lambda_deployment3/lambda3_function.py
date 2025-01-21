@@ -11,7 +11,7 @@ from time import sleep
 dynamodb = boto3.resource("dynamodb")
 comprehend = boto3.client("comprehend")
 
-# Reference your DynamoDB table
+# Reference the RAW Data from the DynamoDB table
 table_name = os.environ.get("DYNAMODB_TABLE_NAME", "RawCommentsTable")
 table = dynamodb.Table(table_name)
 
