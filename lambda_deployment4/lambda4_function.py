@@ -5,8 +5,6 @@ import json
 import boto3
 import os
 from botocore.exceptions import ClientError
-from datetime import datetime
-
 
 # Initialize DynamoDB client
 dynamodb = boto3.resource("dynamodb")
@@ -23,7 +21,6 @@ def fetch_sentiment_scores(video_id, last_updated_at):
     Fetch comments for a specific video_id processed after the last_updated_at timestamp.
     """
     try:
-        # Fetch comments with processed_at > last_updated_at
         response = raw_comments_table.query(
             KeyConditionExpression=boto3.dynamodb.conditions.Key("video_id").eq(video_id),
             FilterExpression=boto3.dynamodb.conditions.Attr("processed_at").gt(last_updated_at),
@@ -89,21 +86,39 @@ def calculate_overall_score(existing_score, existing_count, new_comments):
     return round((updated_score + 1) * 50), total_count
 
 
+def extract_video_id_from_event(event):
+    """
+    Extracts the video_id from the event. Handles DynamoDB Stream event structure.
+    """
+    try:
+        # Check if the event is from DynamoDB Streams
+        if "Records" in event:
+            for record in event["Records"]:
+                if record["eventName"] in ("INSERT", "MODIFY"):
+                    return record["dynamodb"]["NewImage"]["video_id"]["S"]
+        # Fallback for direct invocation with video_id
+        elif "video_id" in event:
+            return event["video_id"]
+    except KeyError as e:
+        print(f"Error extracting video_id: {e}")
+    return None
+
+
 def lambda_handler(event, context):
     """
     Entry point for the Lambda function.
     """
     print(f"Received event: {json.dumps(event, indent=2)}")  # Debugging
 
-    # Validate input
-    if "video_id" not in event:
+    # Extract video_id
+    video_id = extract_video_id_from_event(event)
+    if not video_id:
         print("Error: Missing video_id in the event.")
         return {
             "statusCode": 400,
             "body": json.dumps({"error": "Missing video_id in the event."}),
         }
 
-    video_id = event["video_id"]
     print(f"Processing video ID: {video_id}")
 
     # Fetch metadata for the video
@@ -133,7 +148,7 @@ def lambda_handler(event, context):
     overall_score, updated_count = calculate_overall_score(existing_score, existing_count, new_comments)
 
     # Get the latest processed_at timestamp from new comments
-    latest_timestamp = max(comment["processed_at"] for comment in new_comments)
+    latest_timestamp = max(comment.get("processed_at", last_updated_at) for comment in new_comments)
 
     # Update SentimentScoresTable
     update_video_metadata(video_id, overall_score, updated_count, latest_timestamp)
