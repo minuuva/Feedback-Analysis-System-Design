@@ -6,7 +6,7 @@ import os
 import requests
 import boto3
 
-# Fetch the YouTube API key from environment variables
+# Fetch the YouTube API key from environment variabless
 API_KEY = os.getenv("YOUTUBE_API_KEY")
 SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL")
 
