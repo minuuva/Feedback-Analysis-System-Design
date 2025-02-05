@@ -5,7 +5,6 @@ import json
 import boto3
 import os
 from botocore.exceptions import ClientError
-import math
 
 # Initialize DynamoDB client
 dynamodb = boto3.resource("dynamodb")
@@ -64,62 +63,70 @@ def update_video_metadata(video_id, overall_score, comment_count, latest_timesta
 
 def calculate_overall_score(existing_score, existing_count, new_comments):
     """
-    Calculate an improved overall sentiment score.
+    Calculate an overall sentiment score that does not drop when positive new comments are added.
     
-    For each new comment, the function computes a normalized sentiment value
-    in [-1, 1] based on the ratio of (Positive - Negative) to (Positive + Negative).
-    It then combines the new average with the existing score (converted to the
-    normalized scale) using a Bayesian weighted average that includes a neutral prior.
-    
-    The final result is mapped back to a 0–100 scale.
+    Steps:
+    1. For each new comment, compute a normalized sentiment value (range [-1, 1]) as:
+         norm = (1.25 × Positive – Negative) / (1.25 × Positive + Negative)
+    2. Compute the average normalized score for the new comments (new_avg).
+    3. If new_avg is positive, add a fixed boost (delta = 0.2) to get new_avg_adjusted (capped at 1).
+    4. Convert the existing overall score (0–100) into the normalized range:
+         normalized_existing = (existing_score / 50) – 1.
+    5. Combine the normalized_existing and new_avg_adjusted via a weighted average (by counts).
+    6. **Important:** If new_avg > 0, ensure that the combined normalized score is not below normalized_existing.
+    7. Map the final normalized score back to the 0–100 scale.
     """
-    # Bayesian prior parameters (these can be tuned)
-    baseline_weight = Decimal(10)       # Weight of the neutral prior
-    baseline_sentiment = Decimal(0)       # Neutral sentiment on the normalized scale
-
+    # Weight factor for positive scores: 1.25×
+    positive_weight_factor = Decimal("1.25")
+    
     new_normalized_scores = []
     for comment in new_comments:
         sentiment_score = comment.get("sentiment_score", {})
         positive = Decimal(sentiment_score.get("Positive", "0"))
         negative = Decimal(sentiment_score.get("Negative", "0"))
-        total = positive + negative
-        if total > 0:
-            # Normalize to [-1, 1]
-            norm = (positive - negative) / total
+        # Apply 1.25x weight to positive sentiment
+        weighted_positive = positive_weight_factor * positive
+        weighted_total = weighted_positive + negative
+        if weighted_total > 0:
+            norm = (weighted_positive - negative) / weighted_total
         else:
-            # If no sentiment data is available, consider it neutral
             norm = Decimal(0)
         new_normalized_scores.append(norm)
     
     new_count = len(new_normalized_scores)
-    
-    # Average sentiment for the new comments
     if new_count > 0:
         new_avg = sum(new_normalized_scores) / Decimal(new_count)
     else:
         new_avg = Decimal(0)
     
-    # Convert the existing score (stored on a 0-100 scale) to a normalized value in [-1, 1].
-    # If there is no existing data, default to neutral.
+    # Convert existing overall score (0–100) to normalized [-1, 1]
     if existing_count > 0:
-        normalized_existing_score = (Decimal(existing_score) / Decimal(50)) - Decimal(1)
+        normalized_existing = (Decimal(existing_score) / Decimal(50)) - Decimal(1)
     else:
-        normalized_existing_score = Decimal(0)
+        normalized_existing = Decimal(0)
     
-    # Total effective weight includes existing count, new count, and the baseline prior.
-    total_weight = Decimal(existing_count) + Decimal(new_count) + baseline_weight
+    # Boost new average if positive
+    delta = Decimal("0.2")
+    if new_avg > 0:
+        new_avg_adjusted = min(new_avg + delta, Decimal("1"))
+    else:
+        new_avg_adjusted = new_avg
     
-    # Compute the weighted average including the neutral baseline.
-    updated_norm = (
-        (normalized_existing_score * Decimal(existing_count)) +
-        (new_avg * Decimal(new_count)) +
-        (baseline_sentiment * baseline_weight)
-    ) / total_weight
+    total_count = existing_count + new_count
+    if total_count > 0:
+        # Simple weighted average of the existing and new normalized values:
+        combined = ((normalized_existing * Decimal(existing_count)) + (new_avg_adjusted * Decimal(new_count))) / Decimal(total_count)
+    else:
+        combined = new_avg_adjusted
     
-    # Map the normalized score [-1, 1] to [0, 100]
-    overall_score = round((updated_norm + Decimal(1)) / Decimal(2) * Decimal(100))
+    # If the new comments are positive, do not allow the overall normalized score to drop below the previous value.
+    if new_avg > 0:
+        overall_norm = max(combined, normalized_existing)
+    else:
+        overall_norm = combined
     
-    # The new total count of comments processed (excluding the baseline)
+    # Map the normalized score [-1, 1] back to [0, 100]
+    overall_score = round((overall_norm + Decimal(1)) / Decimal(2) * Decimal(100))
     total_count = existing_count + new_count
     
     return overall_score, total_count
@@ -162,7 +169,6 @@ def lambda_handler(event, context):
 
     # Fetch metadata for the video
     metadata = fetch_video_metadata(video_id)
-
     if metadata:
         existing_score = Decimal(metadata["overall_score"])
         existing_count = metadata["comment_count"]
@@ -175,7 +181,6 @@ def lambda_handler(event, context):
 
     # Fetch new comments processed after the last updated timestamp
     new_comments = fetch_sentiment_scores(video_id, last_updated_at)
-
     if not new_comments:
         print(f"No new comments to process for video_id {video_id}.")
         return {
@@ -183,23 +188,21 @@ def lambda_handler(event, context):
             "body": json.dumps({"message": "No new comments to process."}),
         }
 
-    # Calculate updated overall score using the improved scoring system
+    # Calculate updated overall score using the new logic
     overall_score, updated_count = calculate_overall_score(existing_score, existing_count, new_comments)
 
     # Get the latest processed_at timestamp from new comments
     latest_timestamp = max(comment.get("processed_at", last_updated_at) for comment in new_comments)
 
-    # Update SentimentScoresTable
+    # Update the SentimentScoresTable
     update_video_metadata(video_id, overall_score, updated_count, latest_timestamp)
 
     return {
         "statusCode": 200,
-        "body": json.dumps(
-            {
-                "message": "Score updated successfully.",
-                "video_id": video_id,
-                "overall_score": overall_score,
-                "comment_count": updated_count,
-            }
-        ),
+        "body": json.dumps({
+            "message": "Score updated successfully.",
+            "video_id": video_id,
+            "overall_score": overall_score,
+            "comment_count": updated_count,
+        }),
     }
